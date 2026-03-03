@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0,
+        maximum-scale=1.0, user-scalable=no">
+  <title>iBeer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #0b0905;
+      overflow: hidden;
+      touch-action: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    /* Splash screen shown before motion permission is granted */
+    #splash {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      background: #0b0905;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    #splash .icon  { font-size: 5rem; line-height: 1; }
+    #splash h1     { font-size: 2.4rem; font-weight: 700; color: #c8841a; }
+    #splash p      { font-size: 1rem; color: #666; }
+
+    #pour-btn {
+      margin-top: 8px;
+      padding: 15px 44px;
+      border: none;
+      border-radius: 50px;
+      background: #c8841a;
+      color: #fff;
+      font-size: 1.15rem;
+      font-weight: 600;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+  </style>
+</head>
+<body>
+
+<div id="splash">
+  <div class="icon">🍺</div>
+  <h1>iBeer</h1>
+  <p>Tilt your phone to slosh the beer</p>
+  <button id="pour-btn">Pour Beer</button>
+</div>
+
+<canvas id="c"></canvas>
+
+<script>
+// ── Config ────────────────────────────────────────────────────────────────────
+const FILL       = 0.78;   // fraction of screen the beer fills
+const FOAM_PX    = 54;     // foam band height in logical pixels
+const MAX_TILT   = 35;     // clamp device gamma beyond this (degrees)
+const N_BUBBLES  = 24;
+
+// ── Canvas ────────────────────────────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width  = window.innerWidth  * dpr;
+  canvas.height = window.innerHeight * dpr;
+  canvas.style.width  = window.innerWidth  + 'px';
+  canvas.style.height = window.innerHeight + 'px';
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ── Device tilt ───────────────────────────────────────────────────────────────
+// gamma: degrees of left/right tilt. Positive = tilted right.
+let tiltDeg = 0;
+
+// ── Bubbles (random layout, fixed for the session) ───────────────────────────
+const bubbles = Array.from({ length: N_BUBBLES }, () => ({
+  x:      Math.random() * 0.88 + 0.06,   // normalised horizontal position
+  speed:  Math.random() * 0.12 + 0.08,   // screen-heights per second
+  r:      Math.random() * 5 + 2,         // radius in physical px
+  offset: Math.random(),                  // time phase offset
+}));
+
+// ── Geometry helper ───────────────────────────────────────────────────────────
+// Returns the Y-coordinate of the beer surface at horizontal position x.
+// When tilt > 0 (phone tilted right), the right side of the surface is
+// higher on screen (smaller Y).
+function surfaceY(x, w, h) {
+  const clamped = Math.max(-MAX_TILT, Math.min(MAX_TILT, tiltDeg));
+  const tilt    = Math.tan(clamped * Math.PI / 180);
+  const midY    = h * (1 - FILL);
+  return midY - tilt * (x - w / 2);
+}
+
+// ── Render loop ───────────────────────────────────────────────────────────────
+function draw(ms) {
+  const t = ms / 1000;
+  const w = canvas.width;
+  const h = canvas.height;
+
+  const sy0 = surfaceY(0, w, h);   // surface Y at left edge
+  const syW = surfaceY(w, w, h);   // surface Y at right edge
+
+  // Background
+  ctx.fillStyle = '#0b0905';
+  ctx.fillRect(0, 0, w, h);
+
+  // ── Beer body ─────────────────────────────────────────────────────────────
+  ctx.beginPath();
+  ctx.moveTo(0, sy0);
+  ctx.lineTo(w, syW);
+  ctx.lineTo(w, h);
+  ctx.lineTo(0, h);
+  ctx.closePath();
+
+  ctx.fillStyle = 'hsl(34, 88%, 37%)';
+  ctx.fill();
+
+  // Lighter streak near the surface (light shining through the glass)
+  const lightGrad = ctx.createLinearGradient(w / 2, Math.min(sy0, syW), w / 2, h);
+  lightGrad.addColorStop(0,   'hsla(42, 82%, 72%, 0.48)');
+  lightGrad.addColorStop(0.4, 'hsla(42, 82%, 72%, 0)');
+  ctx.fillStyle = lightGrad;
+  ctx.beginPath();
+  ctx.moveTo(0, sy0);
+  ctx.lineTo(w, syW);
+  ctx.lineTo(w, h);
+  ctx.lineTo(0, h);
+  ctx.closePath();
+  ctx.fill();
+
+  // ── Bubbles ───────────────────────────────────────────────────────────────
+  for (const b of bubbles) {
+    const bx    = b.x * w;
+    const topY  = surfaceY(bx, w, h);
+    const depth = h - topY;
+    if (depth <= 0) continue;
+
+    const progress = (t * b.speed + b.offset) % 1;
+    const by = h - progress * depth;
+    if (by <= topY) continue;   // above the surface — skip
+
+    ctx.beginPath();
+    ctx.arc(bx, by, b.r, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.22)';
+    ctx.fill();
+  }
+
+  // ── Foam ──────────────────────────────────────────────────────────────────
+  // The foam top edge sways slowly and independently from the tilt
+  const sway     = Math.sin(t * 0.7) * 6;
+  const foamTopL = sy0 - FOAM_PX + sway;
+  const foamTopR = syW - FOAM_PX - sway;
+  const arcCtrlY = Math.min(foamTopL, foamTopR) - 14;
+
+  const foamPath = new Path2D();
+  foamPath.moveTo(0, foamTopL);
+  foamPath.quadraticCurveTo(w / 2, arcCtrlY, w, foamTopR);
+  foamPath.lineTo(w, syW);
+  foamPath.lineTo(0, sy0);
+  foamPath.closePath();
+
+  ctx.fillStyle = 'rgba(255,255,255,0.91)';
+  ctx.fill(foamPath);
+
+  // Subtle shadow at the bottom of the foam for depth
+  const foamShadow = ctx.createLinearGradient(
+    w / 2, Math.min(foamTopL, foamTopR),
+    w / 2, (sy0 + syW) / 2
+  );
+  foamShadow.addColorStop(0, 'rgba(190,178,155,0)');
+  foamShadow.addColorStop(1, 'rgba(180,168,145,0.30)');
+  ctx.fillStyle = foamShadow;
+  ctx.fill(foamPath);
+
+  // ── Side glare (frosted-glass feel) ──────────────────────────────────────
+  const gw = w * 0.07;
+
+  const glL = ctx.createLinearGradient(0, 0, gw, 0);
+  glL.addColorStop(0, 'rgba(255,255,255,0.10)');
+  glL.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = glL;
+  ctx.fillRect(0, 0, gw, h);
+
+  const glR = ctx.createLinearGradient(w - gw, 0, w, 0);
+  glR.addColorStop(0, 'rgba(255,255,255,0)');
+  glR.addColorStop(1, 'rgba(255,255,255,0.07)');
+  ctx.fillStyle = glR;
+  ctx.fillRect(w - gw, 0, gw, h);
+
+  requestAnimationFrame(draw);
+}
+
+// ── Motion permission ─────────────────────────────────────────────────────────
+// iOS 13+ requires the permission request to happen inside a user gesture.
+document.getElementById('pour-btn').addEventListener('click', async () => {
+  if (typeof DeviceOrientationEvent?.requestPermission === 'function') {
+    const result = await DeviceOrientationEvent.requestPermission();
+    if (result !== 'granted') {
+      alert('Motion access is needed for the tilt effect.');
+      return;
+    }
+  }
+
+  window.addEventListener('deviceorientation', e => {
+    tiltDeg = e.gamma ?? 0;
+  });
+
+  document.getElementById('splash').remove();
+  requestAnimationFrame(draw);
+});
+</script>
+</body>
+</html>
